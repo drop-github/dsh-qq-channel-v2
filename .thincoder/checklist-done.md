@@ -1,0 +1,1 @@
+- [x] T1: Round 1 设计档就绪（DESIGN.md 三层 + PROTOCOL.md 带 file:line + 批次档 §2）

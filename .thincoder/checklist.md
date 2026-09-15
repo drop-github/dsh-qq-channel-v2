@@ -1,0 +1,4 @@
+- [~] T2: 设计评审（advisor type=design，带 batchDoc）通过且 🔴 逐条裁决收敛
+- [ ] T3: 骨架代码落地（模块 ≤400 行 / ESM / 依赖仅 ws+schemastery / 配置键逐字一致 / qq 预留位）
+- [ ] T4: 测试与证据（node --test 全绿 + 全 .js node --check + mock 覆盖 A2/A3/A5/A6/A7/A8/A10 + VERIFY.md）
+- [ ] T5: ROUND-1-REPORT.md（含 P0/P1/P2 处置表、未验证项、待裁决问题、末行 DONE-ROUND-1）+ 链终 token consume
