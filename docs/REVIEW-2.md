@@ -55,6 +55,15 @@
 ### D3（工具侧，非代码缺陷）
 - 验收台早期把"设置服务立刻可用"当成事实，导致 D1 无法被发现；现已按宿主契约建模（`setSource` + `onChange` + 晚 ~1s 到达），并新增 A25。附带两条 mock 卫生修复（清理已关闭 socket、发送加守卫）。
 
+### D4（P2，建议 Round 3 处理）设置重试耗尽后的日志级别
+- `lib/config.js:110` 在 24 次重试仍失败时记 `warn`（`settings registration exhausted — using row config`）。
+- 该场景通常意味着**拿不到已存凭据**（会以空 appId/clientSecret 启动、QQ 连不上），属"失败看起来像成功"的一类，建议升为 `error` 并在消息里带上"可能缺少凭据"的提示。
+- 现状不影响验收（A25 覆盖的是"晚就绪但最终注册成功"的正常路径）。
+
+### D5（P2，文档完整性）`README.md` 由对接方补写
+- Round 2 未产出任务书要求的 `README.md`（安装 + 17 键 + 信任域）。为不阻塞切换，我按已核实事实补写并提交（含"单会话=单一信任域"、发件箱/收件箱目录、排障表），ThinCoder 可在 Round 3 复核/改写。
+- 另一处待补：`docs/ROUND-2-REPORT.md`（Round 2 进程收尾未完成）。
+
 ## 四、遗留与下一步
 
 1. `docs/ROUND-2-REPORT.md` 尚未落地（Round 2 进程仍在收尾）——不阻塞：上述门禁全部由我独立复跑得出。
