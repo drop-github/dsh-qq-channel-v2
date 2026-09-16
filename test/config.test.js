@@ -46,6 +46,22 @@ test('坏配置退回行配置而不是抛出（不留静默故障面）', () =>
   assert.deepEqual(out.maxChunk, { not: 'a number' });
 });
 
+test('宿主 settings 是 frozen 对象时仍必须归一化，不得静默降级', () => {
+  // 回归：schemastery 的 z.transform 会把结果回写输入对象，而宿主 settings 传的是 frozen 对象，
+  // 曾导致 Config(raw) 每次都抛 "Cannot assign to read only property 'appId'"，
+  // 通道静默降级到未归一化的原始配置（默认值 / 类型强转全失效）。
+  const warnings = [];
+  const log = { warn: (event, fields) => warnings.push(`${event} ${JSON.stringify(fields ?? {})}`) };
+  const frozen = Object.freeze({ appId: 1024, maxChunk: 500 });
+  const out = normalizeConfig(frozen, log);
+  assert.deepEqual(warnings, [], 'frozen 输入不得走降级分支');
+  assert.equal(out.appId, '1024', 'appId 仍须归一为 string');
+  assert.equal(out.enabled, true, '默认值仍须补齐');
+  assert.equal(out.maxReplyChunks, 4, '默认值仍须补齐');
+  assert.equal(out.maxChunk, 500, '显式值必须保留');
+  assert.equal(frozen.appId, 1024, '不得改写调用方的 frozen 对象');
+});
+
 test('settings 服务晚就绪：必须重试注册，并在成功后通知上层采用已存配置（A25）', async () => {
   let calls = 0;
   let installCalls = 0;
