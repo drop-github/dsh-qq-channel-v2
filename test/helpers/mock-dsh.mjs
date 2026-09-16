@@ -39,6 +39,7 @@ export async function startMockDsh(opts = {}) {
     requireAuth = true,
     unauthorizedTimes = 0,     // first N /api calls answer 401 even with a cookie
     unauthorizedPaths = [],    // e.g. ['session/prompt'] -> first hit on that path answers 401
+    promptFailures = 0,        // first N session/prompt calls answer 503 (宿主不可用：测"消息不得丢")
     maxMessagesDefault = 50,
   } = opts;
 
@@ -58,6 +59,8 @@ export async function startMockDsh(opts = {}) {
     pendingForwarded: new Map(), // eventId -> waterfall frame still awaiting a result
     rejectedUpgrades: [],      // legacy paths we refused (e.g. /api/events.mux)
     unauthorizedCount: 0,
+    promptFailuresLeft: promptFailures,   // 注入的 prompt 失败次数（503）
+    promptFailuresServed: 0,
     unauthorizedAttempts: [],  // payloads rejected with a forced 401 (for requestId comparison)
     forcedUnauthorized: new Set(),
     openControlFrames: [],
@@ -150,6 +153,12 @@ export async function startMockDsh(opts = {}) {
     }
     if (path === 'session/rename') { rpcOk(res, {}); return; }
     if (path === 'session/prompt') {
+      if (state.promptFailuresLeft > 0) {
+        state.promptFailuresLeft -= 1;
+        state.promptFailuresServed += 1;
+        rpcErr(res, 'gateway/unavailable', 'session/prompt: host temporarily unavailable (injected)');
+        return;
+      }
       if (!checkExactKeys(endpoint, ['request'])) { state.argViolations.push({ path, keys: Object.keys(endpoint) }); rpcErr(res, 'gateway/arguments-invalid', 'expects request'); return; }
       const r = endpoint.request ?? {};
       // Host type: SessionPromptRequest { requestId, sessionId, mode:'queue'|'steer', content, clientTimeZone? }

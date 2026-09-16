@@ -37,8 +37,8 @@ function readPluginLog() {
   }
 }
 
-async function boot({ unauthorizedTimes = 0, unauthorizedPaths = [], overrides = {} } = {}) {
-  const dsh = await startMockDsh({ unauthorizedTimes, unauthorizedPaths });
+async function boot({ unauthorizedTimes = 0, unauthorizedPaths = [], promptFailures = 0, overrides = {} } = {}) {
+  const dsh = await startMockDsh({ unauthorizedTimes, unauthorizedPaths, promptFailures });
   const qq = await startMockQQ();
   const logs = [];
   const config = {
@@ -271,6 +271,72 @@ test('T-I9/A10：dispose 后不再有任何 HTTP 流量', async () => {
     await sleep(3000);
     assert.equal(t.dsh.state.http.length, after, `dispose 后仍有 ${t.dsh.state.http.length - after} 次请求`);
   } finally { await teardown(t, false); }
+});
+
+// ---- 2026-09-16 卡死事故回归：入站必须"先落盘、成功才清、失败留存" ----
+
+function readPendingOps() {
+  const file = path.join(STORAGE, 'qq-channel-pending.jsonl');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+    .filter(Boolean);
+}
+
+test('T-W7：入站消息在发送前先落盘，成功后清除（卡死即丢消息的回归）', async () => {
+  const t = await boot();
+  try {
+    t.qq.c2c('排队持久化测试');
+    await waitFor(() => t.dsh.state.prompts.length > 0, 'prompt');
+    await waitFor(() => readPendingOps().some((op) => op.op === 'add'), 'pending add');
+
+    const ops = readPendingOps();
+    assert.ok(ops.some((op) => op.op === 'add'), '发送前必须先落盘（否则宿主卡死时消息只活在内存里）');
+    assert.ok(ops.some((op) => op.op === 'remove'), '送达后必须清掉，避免重启后重复补发');
+    const added = ops.find((op) => op.op === 'add');
+    assert.equal(added.item.sessionId, 'session-mock-1');
+    assert.ok(Array.isArray(added.item.parts) && added.item.parts.length > 0, '内容块必须一起落盘');
+  } finally { await teardown(t); }
+});
+
+test('T-W8：prompt 失败时消息不得丢——留存队列并明确告知用户', async () => {
+  const t = await boot({ promptFailures: 1 });
+  try {
+    await waitFor(() => t.dsh.state.openControlFrames.length > 0, 'control stream');
+    t.qq.c2c('这条会因为宿主不可用而失败');
+    await waitFor(() => t.dsh.state.promptFailuresServed > 0, 'injected prompt failure');
+    await waitFor(() => t.qq.textsTo().some((text) => text.includes('待补发')), 'failure notice');
+
+    const ops = readPendingOps();
+    const added = ops.filter((op) => op.op === 'add');
+    const removed = ops.filter((op) => op.op === 'remove');
+    assert.equal(added.length, 1, '失败的消息必须留在队列里');
+    assert.equal(removed.length, 0, '失败不得清队列');
+    assert.equal(
+      added[0].item.parts.some((part) => part.type === 'text' && part.text.includes('宿主不可用')),
+      true,
+      '留存的内容必须包含原文，否则补发时信息已丢失',
+    );
+  } finally { await teardown(t); }
+});
+
+test('T-W9：Worker 不可用时看门狗必须立刻降级可见（不能等第一次卡死）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-boot-'));
+  const { createWatchdog } = await import('../lib/watchdog.js');
+  const watchdog = createWatchdog({
+    dir,
+    workerFactory: () => { throw new Error('no worker in this environment'); },
+  });
+  try {
+    const sink = path.join(dir, 'qq-channel-stall.log');
+    assert.equal(fs.existsSync(sink), true, '降级模式必须立刻留痕');
+    assert.match(fs.readFileSync(sink, 'utf8'), /WITHOUT worker thread/);
+  } finally {
+    watchdog.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test.after(() => {
