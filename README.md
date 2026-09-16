@@ -4,6 +4,7 @@
 
 - 双协议：DSH ≥ 0.1.5（typert 网关，`session/follow` 事件流）与 DSH ≤ 0.1.1（`events.mux`）都支持，自动探测。
 - 事件不丢：以 `session/follow` 为主事件源（宿主保证不丢帧），断线/宿主重建时用 `session/page` 的 `beforeSeq` 向前补页对账。
+- 来源身份稳定：per-source 模式的"来源 → 会话"由来源**算出**（UUIDv5），重启后复用同一个电脑端对话；`qq-channel.lock` 挡住第二个实例，不让两个 `dsh web` 抢同一个 bot。
 - 审批闭环：网关事件 id 与宿主审计 id 分开保存并配对；QQ 侧点击、电脑端处理都会得到**恰好一条**结果通知。
 - 凭据卫生：任何 token/secret 只以指纹或长度入日志；附件下载只对 QQ 官方域名携带凭据。
 - 模块化：`lib/` 按协议层 / 会话层 / QQ 层 / 处理层拆分，单文件 ≤ 400 行，零构建、纯 ESM。
@@ -57,12 +58,19 @@ dsh plugin --profile web add link:/path/to/dsh-qq-channel-v2
 | `qq-channel.log` | 运行日志（不含明文凭据） |
 | `qq-channel-outbox/` | **发件箱**：把文件丢进来，插件会分片上传并发到主人私聊；成功后移入 `sent/`，永久失败移入 `failed/` |
 | `qq-channel-inbox/` | **收件箱**：QQ 发来的图片/附件存盘位置（无视觉能力的模型可据此走 OCR/元数据兜底） |
-| `qq-channel-sources.json` | per-source 模式的来源→会话映射 |
+| `qq-channel.lock` | **多实例锁**：`{pid, at}`，持有者每 30s 刷新；另一个活实例启动时保持待机，不去抢同一个 bot（陈旧锁按 PID 存活判定自动接管） |
+
+per-source 模式的"来源 → 会话"**不落任何文件**：`lib/session/source-session.js` 把
+`sourceKey`（`c2c:<openid>` / `grp:<group>:<member>`）确定性地映射成 UUIDv5 身份
+（`session-<uuid>`，与宿主自建身份同形），再交给宿主 `session/create` —— 宿主语义是
+"磁盘上已有这个身份就 resume、没有才新建"。因此**同一个 QQ 来源在重启后仍落到同一个电脑端对话**，
+并且复用时不重放历史（基线 `skip-history`）。
+（v1 用的是 `qq-channel-sources.json` 落盘映射；v2 早期漏迁了它，导致每次重启新建对话，2026-09-17 修复。）
 
 ## 自测与验收
 
 ```bash
-node --test          # 73 个单元测试（纯逻辑）
+node --test          # 111 个测试：纯逻辑 + mock 宿主/mock QQ 端到端（含"重启复用同一会话""第二实例待机"）
 node --check lib/index.js
 ```
 

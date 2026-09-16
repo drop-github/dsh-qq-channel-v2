@@ -11,14 +11,22 @@
 
 ---
 
-## L1 单元 + 集成测试（73 例）
+## L1 单元 + 集成测试（111 例）
 
 ```powershell
 cd E:\DSHWorkspace\dsh-qq-channel-v2
 node --test --test-isolation=none
 ```
 
-预期：`pass 73 / fail 0 / skipped 0`，无网络访问。
+预期：`pass 111 / fail 0 / skipped 0`，无网络访问。
+
+> 2026-09-17 新增 12 例（回归 v1 → v2 漏迁的两项）：
+> `test/source-session.test.js`（UUIDv5 身份推导，含 RFC 4122 测试向量）、
+> `test/lock.test.js`（实例锁：接管陈旧锁 / 拒绝活持有者 / 心跳 / 降级）、
+> `test/restart-stability.test.js`（端到端：同一来源跨"重启"复用同一会话身份且不重放历史；
+> 另一活实例持锁时本实例待机、一个 IDENTIFY 都不发）。
+> 配套：`test/helpers/mock-dsh.mjs` 的 `session/create` 现在遵守调用方自带的 `sessionId`
+> （与宿主 `createOrAdopt` 的幂等语义一致），并新增 `state.creates` 记录。
 
 > **必须有 `--test-isolation=none`。** 默认隔离模式由 Node 测试运行器用管道
 > spawn 子进程执行每个用例文件；在受限沙箱下管道创建被拒，表现为每个文件都报

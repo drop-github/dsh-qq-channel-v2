@@ -47,6 +47,7 @@ export async function startMockDsh(opts = {}) {
     events: [],                // session log [{seq,type,data,surfaceOp?}]
     sessions: new Set(['session-mock-1']),
     http: [],                  // every /api call: {path, method, args, cookie}
+    creates: [],               // session/create calls: {requested, at}
     prompts: [],               // accepted session/prompt requests
     eventResults: [],          // $events/result payloads
     argViolations: [],         // exact-key violations
@@ -146,9 +147,16 @@ export async function startMockDsh(opts = {}) {
     }
     if (path === 'session/create') {
       if (!checkExactKeys(endpoint, ['request'])) { state.argViolations.push({ path, keys: Object.keys(endpoint) }); rpcErr(res, 'gateway/arguments-invalid', 'expects request'); return; }
-      const id = `session-mock-${state.sessions.size + 1}`;
+      // Host semantics (dsh-api-session-controller `createOrAdopt`): a caller-supplied sessionId is
+      // idempotent — an identity that already exists is resumed, only an unknown one is created.
+      // Added 2026-09-17 for the per-source stable identity regression
+      // (see docs/TESTING.md §L1 and test/restart-stability.test.js).
+      const requested = endpoint.request?.sessionId;
+      state.creates.push({ requested: requested ?? null, at: Date.now() });
+      const id = requested ?? `session-mock-${state.sessions.size + 1}`;
+      const adopted = state.sessions.has(id);
       state.sessions.add(id);
-      rpcOk(res, { sessionId: id });
+      rpcOk(res, { sessionId: id, adopted });
       return;
     }
     if (path === 'session/rename') { rpcOk(res, {}); return; }
