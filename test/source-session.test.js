@@ -2,7 +2,7 @@
 // 于是同一个 QQ 来源每次重启都新建一个电脑端对话）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SOURCE_SESSION_NAMESPACE, sessionIdForSource, uuidV5 } from '../lib/session/source-session.js';
+import { SOURCE_SESSION_NAMESPACE, sessionIdForSource, unreachablePendingReason, uuidV5 } from '../lib/session/source-session.js';
 
 const DNS_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 
@@ -36,4 +36,25 @@ test('空来源键直接抛错，不产生"所有来源塌进同一个会话"的
   assert.throws(() => sessionIdForSource(''), /non-empty/);
   assert.throws(() => sessionIdForSource(undefined), /non-empty/);
   assert.throws(() => uuidV5('x', 'not-a-uuid'), /invalid namespace/);
+});
+
+// T-S4：待补发队列里的"僵尸记录"判定（真实案例：v1 → v2 身份切换前落盘的一条，
+// 指向旧会话 → 补发永远捞不到，却让每次启动都误报"有待补发消息"）。
+test('按来源重算后指向别的会话 = 永远补发不到 → 该丢；指向当前会话 = 必须留着', () => {
+  const sourceKey = 'c2c:1E02C1ACFFC06F6C34CE9E2145852851';
+  const current = sessionIdForSource(sourceKey);
+  assert.equal(unreachablePendingReason({ sourceKey, sessionId: current }), null, '可达的记录不许丢');
+  assert.match(
+    unreachablePendingReason({ sourceKey, sessionId: 'session-5c4401e4-old' }),
+    /record points at session-5c4401e4-old/,
+  );
+});
+
+test('判不了的情况一律保守留着：关掉 per-source、缺来源、空白来源', () => {
+  const sourceKey = 'c2c:USER-A';
+  const stale = { sourceKey, sessionId: 'session-whatever' };
+  assert.equal(unreachablePendingReason(stale, { perSourceSessions: false }), null, '关掉 per-source 时按受管会话补发');
+  assert.equal(unreachablePendingReason({ sessionId: 'session-x' }), null, '老记录没带来源');
+  assert.equal(unreachablePendingReason({ sourceKey: '   ', sessionId: 'session-x' }), null, '空白来源判不了');
+  assert.equal(unreachablePendingReason(null), null, '空记录不炸');
 });

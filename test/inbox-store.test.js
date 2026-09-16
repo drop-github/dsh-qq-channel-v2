@@ -132,6 +132,34 @@ test('真实时间路径：不注入 now 时，刚入队的消息不会被 TTL �
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('dropWhere：启动时清掉"永远补发不到"的记录并落 remove，且不计入"有待补发"告警', () => {
+  const dir = tmpdir();
+  const base = Date.now();
+  const first = createDurableInbox({ dir, log: quiet });
+  first.add({ msgId: 'zombie', sessionId: 'session-old', sourceKey: 'c2c:U1', parts: [{ type: 'text', text: '老身份遗留' }], at: base, now: base });
+  first.add({ msgId: 'live', sessionId: 'session-new', sourceKey: 'c2c:U2', parts: [{ type: 'text', text: '仍然可达' }], at: base, now: base });
+
+  const warns = [];
+  const spy = { info: () => {}, warn: (msg, data) => warns.push({ msg, data }), error: () => {}, debug: () => {} };
+  const second = createDurableInbox({ dir, log: spy });
+  const summary = second.restore(base, { dropWhere: (item) => (item.msgId === 'zombie' ? 'identity changed' : null) });
+
+  assert.equal(summary.dropped, 1);
+  assert.equal(summary.size, 1, '只该剩可达的那条');
+  assert.deepEqual(second.list(null, base).map((item) => item.msgId), ['live']);
+  const drop = warns.find((entry) => entry.msg === 'pending inbound dropped — unreachable by design');
+  assert.ok(drop, '丢弃必须留痕（含 msgId/来源/原因），否则是静默丢消息');
+  assert.equal(drop.data.msgId, 'zombie');
+  const restored = warns.find((entry) => entry.msg === 'pending inbound messages restored after restart');
+  assert.equal(restored?.data.size, 1, '"有待补发"的条数不得把僵尸算进去（否则每次启动都误报）');
+
+  // 丢弃动作必须持久化：否则僵尸会在下一次恢复时复活
+  const third = createDurableInbox({ dir, log: quiet });
+  third.restore(base);
+  assert.deepEqual(third.list(null, base).map((item) => item.msgId), ['live']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('clear：内存与磁盘一起清空（测试/运维用）', () => {
   const dir = tmpdir();
   const inbox = createDurableInbox({ dir, log: quiet });

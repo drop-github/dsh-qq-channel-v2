@@ -11,14 +11,28 @@
 
 ---
 
-## L1 单元 + 集成测试（111 例）
+## L1 单元 + 集成测试（120 例）
 
 ```powershell
 cd E:\DSHWorkspace\dsh-qq-channel-v2
 node --test --test-isolation=none
 ```
 
-预期：`pass 111 / fail 0 / skipped 0`，无网络访问。
+预期：`pass 120 / fail 0 / skipped 0`，无网络访问。
+
+> 2026-09-17 新增 4 例（待补发队列的僵尸与泄漏）：
+> `T-W10`（忙时"并入等待"的消息在合并轮送达后必须清出队列 —— 原来没人清，
+> 每次启动都误报 `pending inbound messages restored`，直到 48h TTL）、
+> `T-W11` + `inbox-store` 的 `dropWhere`（启动时清掉"来源身份重算过、永远补发不到"的
+> 老记录并留痕）、`source-session` 的 `unreachablePendingReason` 判定（判不了就保守留着）。
+> 另把 v1 帧映射从 `channel.js` 拆到 `protocol/v1-frames.js`（组装根回到 400 行预算内），
+> 顺手补上这条路径此前缺失的直测 `test/v1-frames.test.js`。
+
+> 2026-09-17 新增 1 例（T-W10，待补发队列泄漏）：忙时"并入等待"的入站消息会落盘，
+> 但合并轮送达后没人清它 —— 表现为**每次启动都误报** `pending inbound messages restored`
+> （真机上 17:18 的一条在 17:53、17:58 两次启动各误报一次），直到 48h TTL 才自愈。
+> 修法是让落盘 id 跟着 `state.inboundQueue` 一起走、由合并轮成功提交时统一清；
+> 用例断言"并入的那条在合并轮送达前不许清、送达后必须清"，摘掉合并轮的接线即转红。
 
 > 2026-09-17 新增 12 例（回归 v1 → v2 漏迁的两项）：
 > `test/source-session.test.js`（UUIDv5 身份推导，含 RFC 4122 测试向量）、
@@ -88,6 +102,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\DSHWorkspace\qq-channel-v
 |---|---|
 | 真机收不到回复 | L4 输出哪一项 FAIL；再看 `~/.dsh/storages/qq-channel.log` 的 `bridge up` / `follow stream attached` / `QQ READY` |
 | 审批点了没反应 | 日志搜 `event result post failed` |
+| 启动日志报"待补发"但其实没丢过消息 | `~/.dsh/storages/qq-channel-pending.json` 里的僵尸条目（T-W10 泄漏，已修；残留条目靠 48h TTL 或手工 `remove` op 清） |
 | 文件没发出去 | `~/.dsh/storages/qq-channel-outbox/failed/`；日志搜 `40093002`（当日限额）/ `40093001`（可重试） |
 | 本地改完想回归 | L1 → L3 → L2；动到协议/会话层再加 L4 |
 

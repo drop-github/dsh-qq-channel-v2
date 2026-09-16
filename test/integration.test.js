@@ -322,6 +322,74 @@ test('T-W8：prompt 失败时消息不得丢——留存队列并明确告知用
   } finally { await teardown(t); }
 });
 
+// 2026-09-17 泄漏回归：忙时"并入等待"的消息进了落盘队列，却没人把它清出去。
+// 表现：每次启动都误报 `pending inbound messages restored`，让主人以为有消息待补发；
+// 直到 48h TTL 才自愈（实测：17:18 的一条在 17:53 / 17:58 两次启动各误报一次）。
+test('T-W10：忙时并入等待的消息，在合并轮送达后必须清出待补发队列', async () => {
+  const t = await boot({ overrides: { ack: true } });
+  try {
+    await waitFor(() => t.dsh.state.openControlFrames.length > 0, 'control stream');
+    t.qq.c2c('第一条');
+    await waitFor(() => t.dsh.state.prompts.length >= 1, 'first prompt');
+    // 挂起第一轮：不 append turn/end —— 这样第二条才会走"忙时并入等待"分支
+    t.dsh.append('turn/start', { sessionId: 'session-mock-1' });
+    await sleep(800);
+    t.qq.c2c('第二条');
+    await waitFor(() => t.qq.textsTo().some((text) => text.includes('已并入等待')), 'queued ACK', 10000);
+
+    // 场景自证：两条都落盘了，但此刻只清掉了第一条（第二条还没送达）
+    await waitFor(() => readPendingOps().filter((op) => op.op === 'add').length >= 2, 'second add');
+    const adds = () => readPendingOps().filter((op) => op.op === 'add');
+    const removes = () => readPendingOps().filter((op) => op.op === 'remove');
+    assert.equal(adds().length, 2);
+    assert.equal(removes().length, 1, '尚未送达的那条不能提前清（宿主卡死时还得靠它补发）');
+
+    // 合并轮：turn/end 冲刷 inboundQueue → 两条一起送
+    t.dsh.append('assistant/message', { message: { content: [{ type: 'text', text: 'MERGED-REPLY' }] }, sessionId: 'session-mock-1' }, { surfaceOp: 'append' });
+    t.dsh.append('turn/end', { sessionId: 'session-mock-1' });
+    const merged = await waitFor(() => t.dsh.state.prompts[1], 'merged prompt', 15000);
+    assert.ok(JSON.stringify(merged.content).includes('第二条'), '合并轮必须带上被并入的那条，否则这条消息就真丢了');
+
+    await waitFor(() => removes().length >= 2, 'removal after merge', 15000);
+    const cleared = new Set(removes().map((op) => op.msgId));
+    for (const op of adds()) {
+      assert.ok(
+        cleared.has(op.item.msgId),
+        `消息 ${op.item.msgId} 送达后没有清出待补发队列（每次启动都会误报"待补发"，直到 48h TTL）`,
+      );
+    }
+  } finally { await teardown(t); }
+});
+
+// 2026-09-17 真机误报回归：身份切换前落盘的一条记录指向旧会话，补发永远捞不到，
+// 却让每次启动都喊一次"有待补发消息"。启动期必须把它清掉并留痕。
+test('T-W11：启动时清掉"身份重算过、永远补发不到"的僵尸记录', async () => {
+  const zombie = {
+    msgId: 'msg-zombie-stale-identity',
+    sessionId: 'session-5c4401e4-069d-4457-91e8-ad53254a13d0',
+    sourceKey: 'c2c:1E02C1ACFFC06F6C34CE9E2145852851',
+    target: { kind: 'c2c', openid: 'USER-A' },
+    parts: [{ type: 'text', text: '老会话的遗留消息' }],
+    at: Date.now(),
+    attempts: 1,
+  };
+  fs.mkdirSync(STORAGE, { recursive: true });
+  fs.writeFileSync(
+    path.join(STORAGE, 'qq-channel-pending.json'),
+    JSON.stringify({ version: 1, records: [zombie] }),
+  );
+  const t = await boot({ overrides: { perSourceSessions: true } });
+  try {
+    const ops = readPendingOps().filter((op) => op.op === 'remove' && op.msgId === zombie.msgId);
+    assert.equal(ops.length, 1, '僵尸记录必须在启动时被清掉，并落一条 remove（否则下次恢复又复活）');
+    const logged = readPluginLog();
+    assert.ok(
+      logged.includes('pending inbound dropped — unreachable by design') && logged.includes(zombie.msgId),
+      '丢弃必须留痕：静默丢消息是本模块最不能犯的错',
+    );
+  } finally { await teardown(t); }
+});
+
 test('T-W9：Worker 不可用时看门狗必须立刻降级可见（不能等第一次卡死）', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-boot-'));
   const { createWatchdog } = await import('../lib/watchdog.js');
