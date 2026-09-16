@@ -26,7 +26,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/drop-github/dsh-qq-channel.git"
+    "url": "git+https://github.com/drop-github/dsh-qq-channel-v2.git"
+  },
+  "homepage": "https://github.com/drop-github/dsh-qq-channel-v2#readme",
+  "bugs": {
+    "url": "https://github.com/drop-github/dsh-qq-channel-v2/issues"
   },
   "dsh": {
     "bundle": {

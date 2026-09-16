@@ -12,10 +12,13 @@
 ## 安装
 
 ```bash
-# 1) 把本仓库链接进 profile（路径按你的实际目录替换）
+# 从 GitHub 安装（推荐）
+dsh plugin --profile web add github:drop-github/dsh-qq-channel-v2
+
+# 或本地目录（开发/自改场景）
 dsh plugin --profile web add link:/path/to/dsh-qq-channel-v2
 
-# 2) 重启 DSH（插件在启动时加载）
+# 装完重启 DSH（插件在启动时加载）
 ```
 
 安装后插件名仍为 `dsh-qq-channel`，配置命名空间仍为 `qq-channel`，**与 v1 完全兼容**（可直接替换，无需改配置）。
@@ -70,9 +73,11 @@ per-source 模式的"来源 → 会话"**不落任何文件**：`lib/session/sou
 ## 自测与验收
 
 ```bash
-node --test          # 111 个测试：纯逻辑 + mock 宿主/mock QQ 端到端（含"重启复用同一会话""第二实例待机"）
+node --test --test-isolation=none   # 120 个测试：纯逻辑 + mock 宿主/mock QQ 端到端
 node --check lib/index.js
 ```
+
+> 受限沙箱下**必须**带 `--test-isolation=none`：Node 测试运行器默认会 spawn 子进程，管道创建被拒时报 `spawn EPERM`（看着像全红，其实一个用例都没跑）。
 
 本插件在开发期还跑过一套 25 个场景的端到端 mock 验收（收发、审批往返与重复点击、电脑端回补、提问、图片、文件、断线重连、宿主重建、设置竞态）。那套台子不在本仓库内，属于私有验证资产。
 
