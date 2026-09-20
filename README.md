@@ -1,4 +1,4 @@
-# dsh-qq-channel（v2.0.0）
+# dsh-qq-channel（v2.0.1）
 
 把 QQ 官方机器人接到 DSH（DeepSeek Harness）会话上的 Cordis 插件：在手机 QQ 里给机器人发消息，就能驱动你电脑上的 agent；审批、提问、图片与文件双向都能在 QQ 里完成。
 
