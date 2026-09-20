@@ -15,6 +15,7 @@ import {
 } from '../lib/session/state.js';
 import { createPendingStore } from '../lib/session/pending.js';
 import { createDshHandler } from '../lib/handlers/dsh.js';
+import { createQuestionFlow } from '../lib/session/question-flow.js';
 import { ok } from '../lib/result.js';
 
 const quiet = {
@@ -106,15 +107,26 @@ function harness({ ttlMs = 1000 } = {}) {
   };
   const state = createSessionStore({ log: quiet, ttlMs });
   const pending = createPendingStore({ log: quiet });
+  const config = { allowedUsers: ['USER-OWNER'], keyboardApprovals: false, markdown: false };
+  // 提问编排在 session/question-flow.js；这里用真实实现（提问帧 → QQ 消息 → 待答草稿）。
+  const questionFlow = createQuestionFlow({
+    log: quiet,
+    config,
+    port,
+    pending,
+    dsh: { postEventResult: async () => ok({}) },
+    targetFor: (sessionId) => state.replyTarget(sessionId),
+  });
   const handler = createDshHandler({
     log: quiet,
-    config: { allowedUsers: ['USER-OWNER'], keyboardApprovals: false, markdown: false },
+    config,
     state,
     pending,
     port,
     dsh: { setClientId: () => {} },
     isManaged: (sessionId) => state.isManagedSession(sessionId),
     onTurnEnd: async () => {},
+    questionFlow,
   });
   return { sent, state, pending, handler };
 }

@@ -340,6 +340,13 @@ export async function startMockDsh(opts = {}) {
       for (const [ws, streamId] of state.controlStreams) ws.send(JSON.stringify({ type: 'item', streamId, value: frame }));
       return { eventId, auditId };
     },
+    /** waterfall user-questions request on the control stream (host: `user-questions/request`) */
+    requestQuestion({ eventId = randomUUID(), sessionId = 'session-mock-1', questions = [{ id: 'q1', question: '选一个', options: [{ label: '甲' }, { label: '乙' }] }] } = {}) {
+      const frame = { type: 'waterfall', event: 'user-questions/request', eventId, agentId: sessionId, request: { questions } };
+      state.pendingForwarded.set(eventId, frame);
+      for (const [ws, streamId] of state.controlStreams) ws.send(JSON.stringify({ type: 'item', streamId, value: frame }));
+      return { eventId };
+    },
     /** host-side decision (e.g. answered in the desktop GUI) */
     decideAudit(auditId, outcome = 'allowed-once', sessionId = 'session-mock-1') {
       api.append('approval/decided', { id: auditId, outcome }, { sessionId });

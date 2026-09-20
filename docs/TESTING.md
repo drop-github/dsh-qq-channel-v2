@@ -11,14 +11,23 @@
 
 ---
 
-## L1 单元 + 集成测试（120 例）
+## L1 单元 + 集成测试（124 例）
 
 ```powershell
 cd E:\DSHWorkspace\dsh-qq-channel-v2
 node --test --test-isolation=none
 ```
 
-预期：`pass 120 / fail 0 / skipped 0`，无网络访问。
+预期：`pass 124 / fail 0 / skipped 0`，无网络访问。
+
+> 2026-09-20 新增 4 例（提问作答：选项 / 自由输入 / 多问题逐问）：
+> `T-Q1`（回数字选选项）、`T-Q2`（**直接打字**走 `answers[].custom`）、
+> `T-Q3`（多问题拆成一个个问，凑齐才一次性回传）、`T-Q4`（没有待答提问时普通文本不被误吞）。
+> 背景：v2.0.0 的 QQ 侧只认数字，多问题/自由输入会退回"请到电脑 GUI 处理"，
+> 人不在电脑前就答不了；DSH 的作答协议本来就有 `custom` 字段，这次把它接上。
+> 配套：`test/helpers/mock-dsh.mjs` 新增 `requestQuestion()`（waterfall
+> `user-questions/request`）；文本作答从 `handlers/qq.js` 抽到 `handlers/text-answer.js`，
+> 多问题编排在 `session/question-flow.js`。
 
 > 2026-09-17 新增 4 例（待补发队列的僵尸与泄漏）：
 > `T-W10`（忙时"并入等待"的消息在合并轮送达后必须清出队列 —— 原来没人清，

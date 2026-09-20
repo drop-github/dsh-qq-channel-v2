@@ -407,6 +407,89 @@ test('T-W9：Worker 不可用时看门狗必须立刻降级可见（不能等第
   }
 });
 
+// ---- 提问应答（2026-09-20）：选项 / 自由输入 / 多问题逐问 ----
+// 背景：v2.0.0 的 QQ 侧只认「数字选选项」，多问题或自由输入会退回"请到电脑 GUI 处理"，
+// 于是人在外面时答不了。DSH 的作答协议本来就有 `custom` 字段，这里把它接上。
+
+async function askableBoot(t) {
+  await waitFor(() => t.dsh.state.openControlFrames.length > 0, 'control stream');
+  t.qq.c2c('提问前热身');
+  await waitFor(() => t.dsh.state.prompts.length > 0, 'warm-up prompt');
+  return t.dsh.state.prompts.length;
+}
+
+test('T-Q1：提问到 QQ，回数字即选项答案（answers[].selected）', async () => {
+  const t = await boot();
+  try {
+    await askableBoot(t);
+    const { eventId } = t.dsh.requestQuestion({
+      questions: [{ id: 'q1', question: '选哪个方案', options: [{ label: '甲方案' }, { label: '乙方案' }] }],
+    });
+    await waitFor(() => t.qq.textsTo().some((x) => x.includes('选哪个方案')), 'question notice');
+    assert.ok(t.qq.textsTo().some((x) => x.includes('直接打字回答')), '提示里要写清"可以打字"');
+    t.qq.c2c('2');
+    const posted = await waitFor(() => t.dsh.state.eventResults.find((r) => r.eventId === eventId), 'event result');
+    assert.deepEqual(posted.outcome, { kind: 'result', value: { answers: [{ id: 'q1', selected: ['乙方案'] }] } });
+    await waitFor(() => t.qq.textsTo().some((x) => x.includes('已提交')), 'confirmation');
+  } finally { await teardown(t); }
+});
+
+test('T-Q2：自由输入（直接打字）也能作答，走 answers[].custom', async () => {
+  const t = await boot();
+  try {
+    await askableBoot(t);
+    const { eventId } = t.dsh.requestQuestion({
+      questions: [{ id: 'q1', question: '这个需求你怎么理解？' }],
+    });
+    await waitFor(() => t.qq.textsTo().some((x) => x.includes('这个需求你怎么理解')), 'question notice');
+    t.qq.c2c('先做 A 再做 B，但别动 C');
+    const posted = await waitFor(() => t.dsh.state.eventResults.find((r) => r.eventId === eventId), 'event result');
+    assert.deepEqual(posted.outcome, {
+      kind: 'result',
+      value: { answers: [{ id: 'q1', selected: [], custom: '先做 A 再做 B，但别动 C' }] },
+    });
+  } finally { await teardown(t); }
+});
+
+test('T-Q3：多问题一个个问，凑齐了才一次性回传', async () => {
+  const t = await boot();
+  try {
+    await askableBoot(t);
+    const { eventId } = t.dsh.requestQuestion({
+      questions: [
+        { id: 'q1', question: '第一个问题', options: [{ label: '甲' }, { label: '乙' }] },
+        { id: 'q2', question: '第二个问题' },
+      ],
+    });
+    await waitFor(() => t.qq.textsTo().some((x) => x.includes('（1/2）') && x.includes('第一个问题')), 'q1 asked');
+    t.qq.c2c('1');
+    await waitFor(() => t.qq.textsTo().some((x) => x.includes('（2/2）') && x.includes('第二个问题')), 'q2 asked');
+    assert.equal(t.dsh.state.eventResults.filter((r) => r.eventId === eventId).length, 0, '没答完不许回传');
+    t.qq.c2c('随便打的自由答案');
+    const posted = await waitFor(() => t.dsh.state.eventResults.find((r) => r.eventId === eventId), 'event result');
+    assert.deepEqual(posted.outcome, {
+      kind: 'result',
+      value: {
+        answers: [
+          { id: 'q1', selected: ['甲'] },
+          { id: 'q2', selected: [], custom: '随便打的自由答案' },
+        ],
+      },
+    });
+  } finally { await teardown(t); }
+});
+
+test('T-Q4：没有待答提问时，普通文本不会被误当成答案', async () => {
+  const t = await boot();
+  try {
+    await askableBoot(t);
+    t.qq.c2c('这就是一句普通消息');
+    await waitFor(() => t.dsh.state.prompts.length >= 2, 'second prompt', 15000);
+    await sleep(500);
+    assert.equal(t.dsh.state.eventResults.length, 0, '不该凭空回传任何作答');
+  } finally { await teardown(t); }
+});
+
 test.after(() => {
   try {
     fs.rmSync(TMP, { recursive: true, force: true });
