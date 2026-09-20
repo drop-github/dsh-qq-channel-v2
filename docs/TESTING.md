@@ -11,14 +11,21 @@
 
 ---
 
-## L1 单元 + 集成测试（129 例）
+## L1 单元 + 集成测试（130 例）
 
 ```powershell
 cd E:\DSHWorkspace\dsh-qq-channel-v2
 node --test --test-isolation=none
 ```
 
-预期：`pass 129 / fail 0 / skipped 0`，无网络访问。
+预期：`pass 130 / fail 0 / skipped 0`，无网络访问。
+
+> 2026-09-20 新增 1 例（`T-Q5`，点击回执必须走被动窗口）：线上反馈「点了按钮没任何反馈」——
+> 根因是 `onInteraction` 里的回执用 `{kind,openid}` 目标直发，**没有 msg_id** → 退化成
+> 「主动消息」，额度用尽时被 QQ 直接丢弃；而且这条路径失败是静默的（没检查返回值）。
+> 现在回执复用该会话最近一条入站的被动窗口（`state.replyTarget` 的 msgId），失败记
+> `<what> failed to send`。审批的「已批准 ✅」是同一个毛病，一并修了（`T-I11` 补 msg_id 断言）。
+> 反向验证：把被动 msgId 摘掉，`T-Q5` 与 `T-I11/A6` 双红。
 
 > 2026-09-20 新增 5 例（`test/question-flow.test.js`，提问编排直测）：
 > 逐问推进、凑齐才一次性回传、回传失败弹掉刚记的答案且可重试、**没人作答的草稿由 sweep 回收**

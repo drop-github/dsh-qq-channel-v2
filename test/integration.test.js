@@ -131,6 +131,9 @@ test('T-I11/A6/A16：审批键盘 → 先 ACK 再回传；重复点击不二次�
     const ack = t.qq.state.interactions[0];
     assert.ok(ack && ack.at <= posted.at, '必须先 ACK 再回传（A18）');
     await waitFor(() => t.qq.textsTo().some((text) => text.includes('已批准')), 'confirmation');
+    const approvalAck = t.qq.state.sent.find((entry) => String(entry.markdown?.content ?? entry.content ?? '').includes('已批准'));
+    const dump = JSON.stringify(t.qq.state.sent.map((e) => ({ c: e.content, md: e.markdown?.content, k: !!e.keyboard, id: e.msg_id })));
+    assert.ok(approvalAck?.msg_id, `审批回执必须带 msg_id（被动窗口），否则会被 QQ 当主动消息丢掉；sent=${dump}`);
 
     const before = t.dsh.state.eventResults.length;
     t.qq.click(`approve:${eventId}:rejected`);
@@ -487,6 +490,28 @@ test('T-Q4：没有待答提问时，普通文本不会被误当成答案', asyn
     await waitFor(() => t.dsh.state.prompts.length >= 2, 'second prompt', 15000);
     await sleep(500);
     assert.equal(t.dsh.state.eventResults.length, 0, '不该凭空回传任何作答');
+  } finally { await teardown(t); }
+});
+
+test('T-Q5：点按钮后的回执必须走被动窗口（带 msg_id）', async () => {
+  // 线上事故：点击回执用 {kind,openid} 目标直发 → 没有 msg_id → 变成"主动消息"，
+  // 额度用尽时被 QQ 丢弃，用户看到「点了按钮没任何反馈」，而且失败还是静默的。
+  const t = await boot();
+  try {
+    await askableBoot(t);
+    const { eventId } = t.dsh.requestQuestion({
+      questions: [{ id: 'q1', question: '点哪个都行', options: [{ label: '甲' }, { label: '乙' }] }],
+    });
+    const card = await waitFor(() => t.qq.state.sent.find((entry) => entry.keyboard), 'question keyboard', 15000);
+    assert.ok(JSON.stringify(card).includes(`question:${eventId}:`), '键盘按钮应带 question:<eventId>:<index>');
+    t.qq.click(`question:${eventId}:0`);
+    await sleep(1500);
+    const dump = JSON.stringify(t.qq.state.sent.map((e) => ({ c: e.content, md: e.markdown?.content, k: !!e.keyboard, id: e.msg_id })));
+    const lines = readPluginLog().split('\n').filter((l) => /question|interaction|confirm|send failed|crash/i.test(l)).slice(-6).join(' || ');
+    const ack = t.qq.state.sent.find((entry) => String(entry.markdown?.content ?? entry.content ?? '').includes('已提交'));
+    assert.ok(ack, `回执没发出；sent=${dump}；pluginLog=${lines}`);
+    assert.ok(ack.msg_id, '回执必须带 msg_id，否则退化成主动消息会被 QQ 丢掉');
+    assert.ok(Number.isInteger(ack.msg_seq), '同一 msg_id 下必须有唯一 msg_seq');
   } finally { await teardown(t); }
 });
 
