@@ -111,3 +111,46 @@ test('settings 服务一开始就绪时不重试、不通知重启', async () =>
   assert.equal(source.registered(), true);
   source.dispose();
 });
+
+// ---- DSH ≥0.1.7：installSection 被移除，配置改由 plugin-manager 托管（2026-09-22 对比两棵树确认）----
+
+test('DSH ≥0.1.7：settings 服务没有 installSection 时走"宿主托管"分支，不重试、不报错', async () => {
+  const events = [];
+  const log = { info: (e) => events.push(String(e)), warn: (e) => events.push(String(e)), error: (e) => events.push(String(e)), debug: () => {} };
+  // 新版形态：没有 installSection，只有配置读写面
+  const settings = { update: async () => {}, describe: () => ({}), schema: () => ({}) };
+  let getCalls = 0;
+  const ctx = { get: () => { getCalls += 1; return settings; } };
+  let notified = 0;
+  const source = createConfigSource(ctx, log, { appId: 1024 }, { retryDelayMs: 5, onRegistered: () => { notified += 1; } });
+
+  assert.equal(source.registered(), true, '宿主托管算作"配置来源就绪"');
+  assert.equal(source.hostManaged(), true);
+  assert.equal(source.read().appId, '1024', '行配置仍须归一化（数字 appId → 字符串）');
+  assert.equal(source.read().maxChunk, 2000, '默认值仍须补齐');
+
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(getCalls, 1, '不得进入重试循环');
+  assert.equal(notified, 0, '宿主托管下不需要"用已存配置重启"');
+  assert.ok(!events.some((e) => e.includes('registration exhausted')), '不该报"注册耗尽"');
+  assert.ok(!events.some((e) => e.includes('installSection')), '不该出现 installSection 相关报错');
+  assert.ok(events.some((e) => e.includes('host-managed')), '必须留一条明确的"宿主托管"日志');
+  source.dispose();
+});
+
+test('DSH ≥0.1.7 且设置服务晚就绪：识别后立刻停止重试', async () => {
+  const events = [];
+  const log = { info: (e) => events.push(String(e)), warn: (e) => events.push(String(e)), error: (e) => events.push(String(e)), debug: () => {} };
+  const settings = { configure: () => {}, describe: () => ({}) };
+  let calls = 0;
+  const ctx = { get: () => { calls += 1; return calls <= 2 ? undefined : settings; } };
+  const source = createConfigSource(ctx, log, { sessionId: 'row' }, { retryDelayMs: 5 });
+  assert.equal(source.registered(), false, '首次调用时服务还没出现');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(source.hostManaged(), true, '服务出现后应识别为宿主托管');
+  assert.ok(!events.some((e) => e.includes('registration exhausted')));
+  const settled = calls;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(calls, settled, '识别为宿主托管后不得再轮询');
+  source.dispose();
+});

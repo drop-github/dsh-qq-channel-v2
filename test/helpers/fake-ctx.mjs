@@ -8,11 +8,12 @@
 //   ctx.get('webServer') -> { port }
 //   ctx.get('connection')-> { authenticatedUrl(baseUrl) }
 //   ctx.effect(fn)       -> registers a disposer factory
-export function makeFakeCtx({ port, token = 'MOCK-LAUNCH-TOKEN', config, logs = [], name = 'qq-channel', settingsDelayMs = 0, settingsOverride = null } = {}) {
+export function makeFakeCtx({ port, token = 'MOCK-LAUNCH-TOKEN', config, logs = [], name = 'qq-channel', settingsDelayMs = 0, settingsOverride = null, connectionNotReadyTimes = 0, hostManagedSettings = false } = {}) {
   const disposers = [];
   let currentConfig = { ...config };
   const readyAt = Date.now() + settingsDelayMs;
-  const stats = { settingsGetCalls: 0, settingsReadyOnFirstGet: false, installCalls: 0 };
+  let connectionNotReady = connectionNotReadyTimes;
+  const stats = { settingsGetCalls: 0, settingsReadyOnFirstGet: false, installCalls: 0, connectionGetCalls: 0 };
   const settings = {
     installSection(_ctx, _name, _schema, initial, hooks) {
       // Real service contract (dsh-settings/lib/index.js): register -> setSource(() => scope.get())
@@ -37,10 +38,28 @@ export function makeFakeCtx({ port, token = 'MOCK-LAUNCH-TOKEN', config, logs = 
         // ~1s AFTER plugin apply() — v1 needed 3 attempts to register. Model that delay.
         if (Date.now() < readyAt) return undefined;
         if (stats.settingsGetCalls === 1) stats.settingsReadyOnFirstGet = true;
+        // DSH ≥0.1.7 形态：没有 installSection，配置由 plugin-manager/profile entry 托管
+        // （dsh-settings 新版只剩 update/describe/schema 等读写面）。
+        if (hostManagedSettings) {
+          return {
+            update: async () => {},
+            describe: () => ({}),
+            schema: () => ({}),
+            configure: () => {},
+          };
+        }
         return settings;
       }
       if (service === 'webServer') return { port };
       if (service === 'connection') {
+        // 宿主服务晚就绪的真实形态：前 N 次拿不到 connection（DSH ≥0.1.7 下没有 settings 重建兜底，
+        // 插件必须靠自己的有界重试把通道拉起来 —— 见 channel.js 的 scheduleBootRetry）。
+        if (connectionNotReady > 0) {
+          connectionNotReady -= 1;
+          stats.connectionGetCalls += 1;
+          return undefined;
+        }
+        stats.connectionGetCalls += 1;
         return {
           authenticatedUrl: (base) => {
             const u = new URL(base);

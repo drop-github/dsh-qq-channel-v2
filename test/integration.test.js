@@ -37,7 +37,7 @@ function readPluginLog() {
   }
 }
 
-async function boot({ unauthorizedTimes = 0, unauthorizedPaths = [], promptFailures = 0, overrides = {} } = {}) {
+async function boot({ unauthorizedTimes = 0, unauthorizedPaths = [], promptFailures = 0, overrides = {}, ctxOptions = {} } = {}) {
   const dsh = await startMockDsh({ unauthorizedTimes, unauthorizedPaths, promptFailures });
   const qq = await startMockQQ();
   const logs = [];
@@ -61,7 +61,7 @@ async function boot({ unauthorizedTimes = 0, unauthorizedPaths = [], promptFailu
     maxReplyChunks: 4,
     ...overrides,
   };
-  const fake = makeFakeCtx({ port: dsh.port, config, logs, token: 'MOCK-LAUNCH-TOKEN' });
+  const fake = makeFakeCtx({ port: dsh.port, config, logs, token: 'MOCK-LAUNCH-TOKEN', ...ctxOptions });
   plugin.apply(fake.ctx, config);
   await waitFor(() => qq.state.identifies.length > 0, 'QQ IDENTIFY', 15000);
   return { dsh, qq, logs, config, stats: fake.stats, dispose: fake.dispose };
@@ -512,6 +512,42 @@ test('T-Q5：点按钮后的回执必须走被动窗口（带 msg_id）', async 
     assert.ok(ack, `回执没发出；sent=${dump}；pluginLog=${lines}`);
     assert.ok(ack.msg_id, '回执必须带 msg_id，否则退化成主动消息会被 QQ 丢掉');
     assert.ok(Number.isInteger(ack.msg_seq), '同一 msg_id 下必须有唯一 msg_seq');
+  } finally { await teardown(t); }
+});
+
+// ---- DSH ≥0.1.7 兼容（2026-09-22 用 conda 之外的独立 DSH_HOME 在真 0.1.7-alpha.1 上预飞发现）----
+
+test('T-R1：宿主服务晚就绪（connection 还没注册）时，插件必须自行重试到通道建立', async () => {
+  // 真机时序：webServer/connection 在 apply() 之后约 1s 才出现。
+  // DSH ≤0.1.6 靠"settings 注册成功 → 配置变了 → 重建通道"顺手救回；
+  // DSH ≥0.1.7 配置由宿主托管、不再触发重建，若不自己重试，升级后通道会一直哑到下次重启。
+  const t = await boot({ ctxOptions: { connectionNotReadyTimes: 2 } });
+  try {
+    await waitFor(() => t.dsh.state.openControlFrames.length > 0, 'control stream after retry', 20000);
+    await waitFor(() => t.logs.some((l) => l.includes('channel up')), 'channel up after retry', 20000);
+    assert.ok(
+      t.logs.some((l) => l.includes('host services not ready — retrying channel boot')),
+      `必须留下重试日志；logs=${t.logs.filter((l) => /boot|detection|auth cookie/.test(l)).join(' || ')}`,
+    );
+    assert.ok(t.qq.state.identifies.length > 0, '重试后 QQ 网关必须完成 IDENTIFY');
+    assert.ok(t.stats.connectionGetCalls >= 3, `connection 至少被取 3 次（2 次未就绪 + 1 次成功），实际 ${t.stats.connectionGetCalls}`);
+  } finally { await teardown(t); }
+});
+
+test('T-R2：DSH ≥0.1.7 的宿主托管设置（无 installSection）下通道照常建立', async () => {
+  const t = await boot({ ctxOptions: { hostManagedSettings: true } });
+  try {
+    assert.ok(
+      t.logs.some((l) => l.includes('settings are host-managed')),
+      `必须识别为宿主托管；logs=${t.logs.join(' || ')}`,
+    );
+    assert.ok(!t.logs.some((l) => l.includes('installSection')), '不得出现 installSection 相关报错');
+    assert.ok(!t.logs.some((l) => l.includes('registration exhausted')), '不得报"设置注册耗尽"');
+    await waitFor(() => t.qq.state.identifies.length > 0, 'QQ IDENTIFY under host-managed settings', 15000);
+    await waitFor(() => t.dsh.state.openControlFrames.length > 0, 'control stream under host-managed settings', 15000);
+    t.qq.c2c('来自宿主托管设置的测试');
+    await waitFor(() => t.dsh.state.prompts.length > 0, 'prompt under host-managed settings', 15000);
+    assert.ok(t.dsh.state.prompts.length >= 1, '行配置必须照常生效（prompt 到达）');
   } finally { await teardown(t); }
 });
 

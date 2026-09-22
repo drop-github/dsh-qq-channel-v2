@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.0.2
+
+为 **DSH 0.1.7-alpha.1** 做的前置兼容（真 0.1.7 独立 DSH_HOME 预飞通过；0.1.5/0.1.6 行为不变）。
+
+- **设置接口兼容"第三代宿主"**：0.1.7 移除了 `dsh-settings.installSection`（插件配置改由 plugin-manager +
+  profile entry 持有，设置面板按插件的 `Config` schema 渲染）。插件识别该形态后直接采用 profile entry
+  配置，不再空转 24 次注册重试、也不再报"设置注册耗尽"；0.1.5/0.1.6 仍走原来的 `installSection` 路径。
+- **自举重试**：宿主服务（`webServer`/`connection`）在 `apply()` 之后约 1s 才就绪。0.1.6 靠"settings 注册
+  成功 → 生效配置变了 → 重建通道"顺手救回，而 0.1.7 配置由宿主托管、不再触发重建 —— 一旦抢跑，QQ 通道会
+  一直哑到下次重启。现在插件自己按 1s 间隔、最多 15 次重试自举（`BOOT_RETRY_MS` / `BOOT_RETRY_MAX`），
+  耗尽时显式报错而不是静默。
+- 与 0.1.7 其它改动的核对结论：插件 config 仍按普通值传入（只有标 `.volatile()` 的字段才变 store）、
+  `ctx.get('webServer'|'connection')`、`session/*` + `$events` + `remote.mux` 契约、事件名（`turn/start`、
+  `assistant/message`…）均未变；会话日志 v3→v4 不影响本插件（走 API、不读日志文件）。
+- 新增两条集成用例：**T-R1**（宿主服务晚就绪必须自行重试到通道建立）、**T-R2**（宿主托管设置下通道照常建立），
+  去掉修复即红。L1 = 134/134。
+
 ## v2.0.1
 
 提问作答与回执修复。
