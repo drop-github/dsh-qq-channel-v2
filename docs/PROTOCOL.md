@@ -95,6 +95,7 @@
 | `session/rename` | `request` | `request` | 同文件 `:1020-1030` |
 | `session/prompt` | `request` | `request` | 同文件 `:996-1003` |
 | `session/page` | `request` | `request` | 同文件 `:970-971` |
+| `commands/execute` | 恰 `agentId,line,submittedAttachments` | `agent,line,submittedAttachments` | `dsh-commands/lib/typert.host.js:51-100`；2026-09-23 真机 0.1.7-alpha.1 核证（`tmp/probe-command.mjs`） |
 | `session/follow`（流） | `request` | `request` | 同文件 `:850-860` |
 | `$events`（流） | 恰 `{"args":{}}`（args 零自有键） | — | `dsh-api-gateway/lib/index.js:586` |
 | `$events/result` | 恰 `clientId,eventId,outcome` | — | `dsh-api-gateway/lib/types/stream-protocol.js:17-24` |
@@ -368,6 +369,30 @@
 
 ---
 
+## 6.5 命令通道 `commands/execute`（v2.0.3 新增）
+
+宿主侧是 `dsh-commands` 的 `CommandRuntime`：**插件注册、宿主执行、不进模型**的人类命令（`/compact`、
+`/goal`、`/feedback`、`/plan`、`/permission`、`/export` 由各自插件注册）。GUI 的斜杠命令走的就是它。
+
+- 请求 args **逐字**：`{ agentId, line, submittedAttachments }`。`agentId` 就是会话 id；`submittedAttachments`
+  恒为 `[]`（本插件不接收命令附件，带附件的消息一律走 prompt）。
+- `line` 传**整行原文**，命令名与输入的切分由宿主自己做 —— 别在客户端预切，否则会跟宿主的语法判据漂移。
+- 🔴 **"不是命令"的返回形状**：语法不认识（`/Compact`、`/紧凑`、`/compact后`、`//x`）或命令名没注册时，
+  宿主返回 `{"result":{"ok":true}}` —— **连 `value` 字段都没有**，且**不落任何事件**（真机 0.1.7-alpha.1 核证）。
+  客户端据此退回 prompt，行为与升级前一致：`/不存在的命令` 仍会当普通消息发给模型。
+- 成功/失败的返回形状：`{ commandId, result: { kind:'success'|'error', text?, sourceEventSeq? } }`。
+  `kind:'error'` 的两个典型场景：未知子命令、`/compact` 命中「有压缩在跑或 agent 不空闲」。
+  命令执行本身在会话日志里留下**成对的** `command/run` + `command/done` 事件（`dsh-commands` 负责写），
+  它们不经 `$events` 推给客户端 —— QQ 侧只看 `execute` 的返回值。
+- 命令**只在 agent 空闲时才可能成功**：`/compact` 在 agent 跑着的时候恒失败（真机原文：
+  `Compaction is unavailable because this process has an active compaction, or the agent is not idle.`）。
+  客户端要把这句原文回给用户，并提示"等这轮结束再发一次"，**不要**自动重试（重试会把命令排进队列语义）。
+- v1 宿主（DSH ≤0.1.1）没有这个服务：客户端按 `codes: protocol-unsupported` 处理并退回 prompt。
+
+判据正则（两端必须逐字一致）：`/^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u`（`dsh-commands/lib/index.js:103`）。
+
+---
+
 ## 7. 审批与提问
 
 ### 7.1 审批 id 的两个身份（P1-6 的根因）
@@ -521,3 +546,6 @@
   §6 补 image 块实测边界；§8 被动回复窗口（M1）/`click_limit`（M3）/文件链（M4）行重写，§8.1 补 `SKIP_QQ`/A16/A20；
   §9.14 记对方两份档之间的冲突（以 REVIEW-1 为准）；§10.1、§10.6 改为已裁决；§0.2 指纹表按 2026-09-16 04:2x 重核。
   证据来源：Hermes `gateway/platforms/qqbot/{adapter.py,keyboards.py,chunked_upload.py}`（逐行核）+ `thincoder-v2-live-verified.md`。
+- 2026-09-23：新增 §6.5 命令通道 `commands/execute` + §1.4 对应行。证据来自真机 0.1.7-alpha.1：
+  `commands/list` 返回 6 个已注册命令（compact/export/feedback/goal/permission/plan）；对未注册命令名与
+  非命令行，`commands/execute` 均返回**无 value** 的 `{ok:true}`（`tmp/probe-command.mjs` 原始报文）。

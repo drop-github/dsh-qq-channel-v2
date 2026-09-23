@@ -515,6 +515,59 @@ test('T-Q5：点按钮后的回执必须走被动窗口（带 msg_id）', async 
   } finally { await teardown(t); }
 });
 
+// ---- 命令通道（v2.0.3：QQ 里 `/compact` 必须真的执行，而不是变成一句普通消息）----
+
+test('T-C1：QQ 里发 /compact → 走 commands/execute，绝不进模型，结果回给用户', async () => {
+  const t = await boot();
+  try {
+    await waitFor(() => t.dsh.state.openControlFrames.length > 0, '$events 控制流');
+    t.qq.c2c('/compact');
+    const call = await waitFor(() => t.dsh.state.commandExecutions[0], 'commands/execute');
+    assert.equal(call.agentId, 'session-mock-1', 'agentId 就是本次会话 id');
+    assert.equal(call.line, '/compact', '整行原样交给宿主（宿主自己解析命令名与输入）');
+    assert.deepEqual(call.submittedAttachments, []);
+    assert.equal(t.dsh.state.argViolations.length, 0, `参数键违反：${JSON.stringify(t.dsh.state.argViolations)}`);
+    await sleep(500);
+    assert.equal(t.dsh.state.prompts.length, 0, '命令绝不能同时当成 prompt 喂给模型');
+    const reply = await waitFor(() => t.qq.textsTo().find((text) => text.includes('Compacted 12 history items')), 'command reply');
+    assert.match(reply, /^✅ /, '结果要带成败记号');
+    const sent = t.qq.state.sent.at(-1);
+    assert.ok(sent.msg_id, '结果必须走被动回复窗口（带 msg_id）');
+    assert.ok(t.logs.some((l) => l.includes('command executed')), '日志要留下执行痕迹');
+  } finally { await teardown(t); }
+});
+
+test('T-C2：宿主不认识这一行 → 照常当普通消息发给模型（升级前后行为一致）', async () => {
+  const t = await boot();
+  try {
+    t.qq.c2c('/nope 这行宿主不认识');
+    await waitFor(() => t.dsh.state.commandExecutions.length > 0, '先问过宿主');
+    const prompt = await waitFor(() => t.dsh.state.prompts[0], 'fallback prompt');
+    assert.match(prompt.content.map((p) => p.text ?? '').join(''), /\/nope/);
+  } finally { await teardown(t); }
+});
+
+test('T-C2b：非命令行一个字都不发给命令通道', async () => {
+  const t = await boot();
+  try {
+    t.qq.c2c('这是普通消息，里面提到 /compact 三个字');
+    await waitFor(() => t.dsh.state.prompts.length > 0, 'prompt');
+    assert.equal(t.dsh.state.commandExecutions.length, 0, '不该碰 commands/execute');
+  } finally { await teardown(t); }
+});
+
+test('T-C3：命令执行报错（有压缩在跑 / agent 不空闲）要如实回给用户，且不再进模型', async () => {
+  const t = await boot();
+  try {
+    t.dsh.scriptCommand('compact', () => ({ kind: 'error', text: 'Compaction is unavailable because the agent is not idle.' }));
+    t.qq.c2c('/compact');
+    const reply = await waitFor(() => t.qq.textsTo().find((text) => text.includes('not idle')), 'error reply');
+    assert.match(reply, /^❌ \/compact 失败：/);
+    await sleep(500);
+    assert.equal(t.dsh.state.prompts.length, 0, '命令已被命令通道处理，不得再发给模型');
+  } finally { await teardown(t); }
+});
+
 // ---- DSH ≥0.1.7 兼容（2026-09-22 用 conda 之外的独立 DSH_HOME 在真 0.1.7-alpha.1 上预飞发现）----
 
 test('T-R1：宿主服务晚就绪（connection 还没注册）时，插件必须自行重试到通道建立', async () => {

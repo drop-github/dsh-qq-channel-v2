@@ -1,4 +1,4 @@
-# dsh-qq-channel（v2.0.2）
+# dsh-qq-channel（v2.0.3）
 
 把 QQ 官方机器人接到 DSH（DeepSeek Harness）会话上的 Cordis 插件：在手机 QQ 里给机器人发消息，就能驱动你电脑上的 agent；审批、提问、图片与文件双向都能在 QQ 里完成。
 
@@ -7,6 +7,7 @@
 - 来源身份稳定：per-source 模式的"来源 → 会话"由来源**算出**（UUIDv5），重启后复用同一个电脑端对话；`qq-channel.lock` 挡住第二个实例，不让两个 `dsh web` 抢同一个 bot。
 - 审批闭环：网关事件 id 与宿主审计 id 分开保存并配对；QQ 侧点击、电脑端处理都会得到**恰好一条**结果通知。
 - 提问可作答：选项回数字/点按钮；**需要自由输入的问题直接打字**（走 `answers[].custom`）；多问题拆成一个个问、答完一次性回传。
+- 命令通道：QQ 里以 `/` 开头的命令行交给**宿主直接执行、不进模型**（`/compact` 压缩历史、`/goal`、`/plan`、`/feedback`、`/permission`、`/export`）；执行结果原样回到 QQ，宿主不认识的行仍当普通消息发给 agent。
 - 凭据卫生：任何 token/secret 只以指纹或长度入日志；附件下载只对 QQ 官方域名携带凭据。
 - 模块化：`lib/` 按协议层 / 会话层 / QQ 层 / 处理层拆分，单文件 ≤ 400 行，零构建、纯 ESM。
 
@@ -48,6 +49,20 @@ dsh plugin --profile web add link:/path/to/dsh-qq-channel-v2
 | `maxChunk` | number | `2000` | 单条消息最大字符数（按码点切分） |
 | `maxReplyChunks` | number | `4` | 一条回复最多分几块 |
 
+## 命令通道（v2.0.3 起）
+
+在 QQ 里发 `/compact`，压缩的是**电脑上这个会话**；`/goal`、`/plan`、`/feedback`、`/permission`、`/export`
+同理 —— 这些命令由宿主直接执行，**不会进模型**（模型看不到它们，也不会"回答"它们）。
+
+- 判据与电脑端逐字一致：`/` + 小写命令名 + 空白/行尾。`/Compact`、`/紧凑`、`/compact后`、句子中间的
+  `/compact` 都**不是**命令，原样当普通消息发给 agent（升级前后行为完全一样）。
+- 结果原样回到 QQ（成功 `✅`、失败 `❌` 前缀 + 宿主原文），并且走被动回复窗口。
+- 命令只在 **agent 空闲**时能成功：例如 `/compact` 在你上一轮还没跑完时会回
+  "Compaction is unavailable because … the agent is not idle." —— 等这轮结束再发一次即可，插件不会自动重试。
+- 命令列表由**宿主要注册什么就有什么**（任何插件都能注册命令）；老宿主（DSH ≤0.1.1）没有这条通道，
+  此时 `/compact` 退化成普通消息。
+- 带图片/附件的消息不走命令通道（命令通道没有附件接收面，避免把附件悄悄吞掉）。
+
 ## 信任域（请务必理解）
 
 - **`perSourceSessions: false`（默认值）= 单一信任域**：所有来源共用一个 DSH 会话。审批/提问属于高权限交互，此模式下只允许 `allowedUsers[0]`（主人私聊）代答，群里其他人无法批准。
@@ -74,7 +89,7 @@ per-source 模式的"来源 → 会话"**不落任何文件**：`lib/session/sou
 ## 自测与验收
 
 ```bash
-node --test --test-isolation=none   # 120 个测试：纯逻辑 + mock 宿主/mock QQ 端到端
+node --test --test-isolation=none   # 147 个测试：纯逻辑 + mock 宿主/mock QQ 端到端
 node --check lib/index.js
 ```
 

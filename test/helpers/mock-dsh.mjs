@@ -8,6 +8,9 @@
 //   - browserAuth: GET /?token=... -> 303 + Set-Cookie, /api without cookie -> 401
 //   - session/page: message-aligned backwards window (cut/hasMore) + "past cursor" error
 //   - remote.mux: {type:'item'|'end'|'error'} frames, $events ready/cancel/emit/waterfall
+//   - commands/execute (v2.0.3): exact keys {agentId,line,submittedAttachments}; an unregistered or
+//     syntactically-invalid line answers `{ok:true}` with NO value — verified against the real
+//     0.1.7-alpha.1 host (tmp/probe-command.mjs), and that is how the plugin detects "not a command".
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { randomUUID } from 'node:crypto';
@@ -66,6 +69,12 @@ export async function startMockDsh(opts = {}) {
     forcedUnauthorized: new Set(),
     openControlFrames: [],
     cookieIssued: 0,
+    commandExecutions: [],     // commands/execute calls: {agentId, line, submittedAttachments}
+    // 已注册的命令（宿主 CommandRuntime 的等价物）；键 = 不带斜杠的小写命令名。
+    commands: new Map([
+      ['compact', () => ({ kind: 'success', text: 'Compacted 12 history items (~3456 tokens).' })],
+      ['feedback', (rawInput) => ({ kind: 'success', text: `feedback recorded:${rawInput.trim()}` })],
+    ]),
   };
   const listeners = { onControlItem: [] };
 
@@ -221,6 +230,27 @@ export async function startMockDsh(opts = {}) {
       rpcOk(res, { records: page.events.map((event) => ({ event })), hasMore: page.hasMore });
       return;
     }
+    if (path === 'commands/execute') {
+      if (!v2) { rpcErr(res, 'gateway/unknown-method', 'no such method'); return; }
+      if (!checkExactKeys(endpoint, ['agentId', 'line', 'submittedAttachments'])) {
+        state.argViolations.push({ path, keys: Object.keys(endpoint) });
+        rpcErr(res, 'gateway/arguments-invalid', 'commands/execute expects agentId,line,submittedAttachments');
+        return;
+      }
+      const { agentId, line, submittedAttachments } = endpoint;
+      state.commandExecutions.push({ agentId, line, submittedAttachments });
+      // Same regex as the host's parseCommand (dsh-commands/lib/index.js).
+      const parsed = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u.exec(String(line ?? ''));
+      const handler = parsed ? state.commands.get(parsed[1]) : undefined;
+      if (!handler) {
+        // Real host: syntax miss or unregistered name → {ok:true} with no value at all.
+        rpcOk(res, undefined);
+        return;
+      }
+      const produced = typeof handler === 'function' ? handler(parsed[2] ?? '', parsed[1]) : handler;
+      rpcOk(res, { commandId: `cmd-mock-${state.commandExecutions.length}`, result: produced });
+      return;
+    }
     if (path === '$events/result') {
       if (!checkExactKeys(endpoint, ['clientId', 'eventId', 'outcome'])) { state.argViolations.push({ path, keys: Object.keys(endpoint) }); rpcErr(res, 'gateway/arguments-invalid', 'expects clientId,eventId,outcome'); return; }
       state.eventResults.push({ ...endpoint, at: Date.now() });
@@ -328,6 +358,15 @@ export async function startMockDsh(opts = {}) {
       for (let i = 0; i < n; i++) {
         api.append('user/message', { message: { content: [{ type: 'text', text: `pad-${i}` }] }, sessionId }, { surfaceOp: 'append' });
       }
+    },
+    /** register/replace a command (host CommandRuntime.register equivalent) */
+    scriptCommand(name, handler) {
+      state.commands.set(name, handler);
+      return name;
+    },
+    /** unregister a command — the line must then fall back to a prompt, not vanish */
+    unregisterCommand(name) {
+      return state.commands.delete(name);
     },
     /** waterfall approval request on the control stream */
     requestApproval({ eventId = randomUUID(), auditId = randomUUID(), sessionId = 'session-mock-1', toolName = 'pwsh', reason = 'mock approval' } = {}) {
