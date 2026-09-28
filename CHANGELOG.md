@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.0.4
+
+发文件不再发两份。
+
+- **修复"同一文件发两次"**：发件箱原先按"上传响应里带 `file_info`"推断"服务端没有代发"，于是补发一条
+  `msg_type:7` 媒体消息。但上传链里 `/files` 是带 **`srv_send_msg:true`** 调的（服务端**已经下发**），
+  响应里的 `file_info` 只是回执字段 —— 结果文件被服务端发一次、插件再补发一次，用户收到两张同名卡
+  （真机实测：手机端两张 29.19KB 的同名 `.md`；插件日志只有一条 `outbox file sent`，正是这个错位）。
+  现在**默认不再补发**；确需补发时显式设 `DSH_QQ_MEDIA_REDELIVER=1`，并在日志里警告"可能双发"。
+  代码里那句"该分支为防御性设计，真机未核（未验证项）"的推断已按真机结果改正。
+- **内容级去重（防误操作）**：发送前算文件 `sha256`，同一内容在 **30 分钟**窗口内只发一次，
+  索引落在 `$DSH_HOME/storages/qq-outbox-hash-index.json`（最多保留 200 条）。命中时写
+  `duplicate file suppressed` 并移入 `sent/`，避免"同一文件被重复放进发件箱"再次打扰用户。
+- 新增两条日志留痕，便于事后定位：`upload already delivered by server — media redeliver skipped`、
+  `duplicate file suppressed (same sha256 already sent recently)`。
+- 回归：`node --test test/*.test.js` **144/144 全绿**（改动只碰发件箱投递路径）。
+
 ## v2.0.3
 
 QQ 里的斜杠命令不再"假装执行"。
